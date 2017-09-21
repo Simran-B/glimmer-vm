@@ -40,7 +40,7 @@ export default class CompilableTemplate<S extends SymbolTable, Specifier> implem
       compileStatement(statements[i], builder);
     }
 
-    let handle = builder.commit(program.heap);
+    let handle = builder.commit(program.heap, containingLayout.block.symbols.length);
 
     if (DEBUG) {
       let { heap } = program;

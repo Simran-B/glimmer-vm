@@ -49,5 +49,6 @@ export { NodeLazyRenderDelegate, NodeEagerRenderDelegate } from './lib/environme
 
 export { default as EagerRenderDelegate } from './lib/environment/modes/eager/render-delegate';
 export { default as LazyRenderDelegate } from './lib/environment/modes/lazy/render-delegate';
+export { default as EagerTestEnvironment } from './lib/environment/modes/eager/environment';
 
 export * from './lib/environment/components';

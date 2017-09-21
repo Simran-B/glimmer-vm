@@ -12,7 +12,7 @@ import {
   CompileTimeLazyConstants,
   CompileTimeHeap
 } from "@glimmer/interfaces";
-import { dict, EMPTY_ARRAY, expect, fillNulls, Stack, unreachable } from '@glimmer/util';
+import { dict, EMPTY_ARRAY, expect, Stack, unreachable } from '@glimmer/util';
 import { Op, Register } from '@glimmer/vm';
 import * as WireFormat from '@glimmer/wire-format';
 import { SerializedInlineBlock } from "@glimmer/wire-format";
@@ -96,10 +96,185 @@ export interface OpcodeBuilderConstructor {
       asPartial: boolean): OpcodeBuilder<Specifier>;
 }
 
-export abstract class OpcodeBuilder<Specifier> {
+export class SimpleOpcodeBuilder {
+  protected encoder = new InstructionEncoder([]);
+
+  push(name: Op, ...ops: number[]) {
+    let { encoder } = this;
+    encoder.encode(name, ...ops);
+  }
+
+  commit(heap: CompileTimeHeap, scopeSize: number): VMHandle {
+    this.push(Op.Return);
+
+    let { buffer } = this.encoder;
+
+    // TODO: change the whole malloc API and do something more efficient
+    let handle = heap.malloc();
+
+    for (let i = 0; i < buffer.length; i++) {
+      heap.push(buffer[i]);
+    }
+
+    heap.finishMalloc(handle, scopeSize);
+
+    return handle;
+  }
+
+  reserve(name: Op, size = 1) {
+    let reservedOperands = [];
+    for (let i = 0; i < size; i++) {
+      reservedOperands[i] = -1;
+    }
+
+    this.push(name, ...reservedOperands);
+  }
+
+  ///
+
+  main() {
+    this.push(Op.Main, Register.s0);
+    this.invokePreparedComponent(false);
+  }
+
+  dynamicContent(isTrusting: boolean) {
+    this.push(Op.DynamicContent, isTrusting ? 1 : 0);
+  }
+
+  beginComponentTransaction() {
+    this.push(Op.BeginComponentTransaction);
+  }
+
+  commitComponentTransaction() {
+    this.push(Op.CommitComponentTransaction);
+  }
+
+  pushDynamicScope() {
+    this.push(Op.PushDynamicScope);
+  }
+
+  popDynamicScope() {
+    this.push(Op.PopDynamicScope);
+  }
+
+  pushRemoteElement() {
+    this.push(Op.PushRemoteElement);
+  }
+
+  popRemoteElement() {
+    this.push(Op.PopRemoteElement);
+  }
+
+  pushRootScope(symbols: number, bindCallerScope: boolean) {
+    this.push(Op.RootScope, symbols, (bindCallerScope ? 1 : 0));
+  }
+
+  pushChildScope() {
+    this.push(Op.ChildScope);
+  }
+
+  popScope() {
+    this.push(Op.PopScope);
+  }
+
+  prepareArgs(state: Register) {
+    this.push(Op.PrepareArgs, state);
+  }
+
+  createComponent(state: Register, hasDefault: boolean) {
+    let flag = (hasDefault as any) | 0;
+    this.push(Op.CreateComponent, flag, state);
+  }
+
+  registerComponentDestructor(state: Register) {
+    this.push(Op.RegisterComponentDestructor, state);
+  }
+
+  putComponentOperations() {
+    this.push(Op.PutComponentOperations);
+  }
+
+  getComponentSelf(state: Register) {
+    this.push(Op.GetComponentSelf, state);
+  }
+
+  getComponentTagName(state: Register) {
+    this.push(Op.GetComponentTagName, state);
+  }
+
+  getComponentLayout(state: Register) {
+    this.push(Op.GetComponentLayout, state);
+  }
+
+  invokeComponentLayout(state: Register) {
+    this.push(Op.InvokeComponentLayout, state);
+  }
+
+  didCreateElement(state: Register) {
+    this.push(Op.DidCreateElement, state);
+  }
+
+  didRenderLayout(state: Register) {
+    this.push(Op.DidRenderLayout, state);
+  }
+
+  pushFrame() {
+    this.push(Op.PushFrame);
+  }
+
+  popFrame() {
+    this.push(Op.PopFrame);
+  }
+
+  invokeVirtual(): void {
+    this.push(Op.InvokeVirtual);
+  }
+
+  invokeYield(): void {
+    this.push(Op.InvokeYield);
+  }
+
+  toBoolean() {
+    this.push(Op.ToBoolean);
+  }
+
+  invokePreparedComponent(hasBlock: boolean, populateLayout: Option<() => void> = null) {
+    this.beginComponentTransaction();
+    this.pushDynamicScope();
+
+    this.createComponent(Register.s0, hasBlock);
+
+    // this has to run after createComponent to allow
+    // for late-bound layouts, but a caller is free
+    // to populate the layout earlier if it wants to
+    // and do nothing here.
+    if (populateLayout) populateLayout();
+
+    this.registerComponentDestructor(Register.s0);
+
+    this.getComponentSelf(Register.s0);
+
+    this.invokeComponentLayout(Register.s0);
+    this.didRenderLayout(Register.s0);
+    this.popFrame();
+
+    this.popScope();
+    this.popDynamicScope();
+    this.commitComponentTransaction();
+  }
+
+  protected get pos(): number {
+    return this.encoder.typePos;
+  }
+
+  protected get nextPos(): number {
+    return this.encoder.size;
+  }
+}
+
+export abstract class OpcodeBuilder<Specifier> extends SimpleOpcodeBuilder {
   public constants: CompileTimeConstants;
 
-  private encoder = new InstructionEncoder([]);
   private labelsStack = new Stack<Labels>();
   private isComponentAttrs = false;
   public component: ComponentBuilder<Specifier> = new ComponentBuilder(this);
@@ -112,50 +287,12 @@ export abstract class OpcodeBuilder<Specifier> {
     public containingLayout: ParsedLayout,
     public asPartial: boolean
   ) {
+    super();
     this.constants = program.constants;
   }
 
-  private get pos(): number {
-    return this.encoder.typePos;
-  }
-
-  private get nextPos(): number {
-    return this.encoder.size;
-  }
-
-  upvars<T extends [Opaque]>(count: number): T {
-    return fillNulls(count) as T;
-  }
-
-  reserve(name: Op, size = 1) {
-    let reservedOperands = [];
-    for (let i = 0; i < size; i++) {
-      reservedOperands[i] = -1;
-    }
-
-    this.push(name, ...reservedOperands);
-  }
-
-  push(name: Op, ...ops: number[]) {
-    let { encoder } = this;
-    encoder.encode(name, ...ops);
-  }
-
-  commit(heap: CompileTimeHeap): VMHandle {
-    this.push(Op.Return);
-
-    let { buffer } = this.encoder;
-
-    // TODO: change the whole malloc API and do something more efficient
-    let handle = heap.malloc();
-
-    for (let i = 0; i < buffer.length; i++) {
-      heap.push(buffer[i]);
-    }
-
-    heap.finishMalloc(handle, this.containingLayout.block.symbols.length);
-
-    return handle;
+  label(name: string) {
+    this.labels.label(name, this.nextPos);
   }
 
   setComponentAttrs(enabled: boolean): void {
@@ -194,55 +331,6 @@ export abstract class OpcodeBuilder<Specifier> {
     this.push(Op.PushDynamicComponentManager, this.constants.serializable(referrer));
   }
 
-  prepareArgs(state: Register) {
-    this.push(Op.PrepareArgs, state);
-  }
-
-  createComponent(state: Register, hasDefault: boolean, hasInverse: boolean) {
-    let flag = (hasDefault === true ? 1 : 0) | ((hasInverse === true ? 1 : 0) << 1);
-    this.push(Op.CreateComponent, flag, state);
-  }
-
-  registerComponentDestructor(state: Register) {
-    this.push(Op.RegisterComponentDestructor, state);
-  }
-
-  beginComponentTransaction() {
-    this.push(Op.BeginComponentTransaction);
-  }
-
-  commitComponentTransaction() {
-    this.push(Op.CommitComponentTransaction);
-  }
-
-  putComponentOperations() {
-    this.push(Op.PutComponentOperations);
-  }
-
-  getComponentSelf(state: Register) {
-    this.push(Op.GetComponentSelf, state);
-  }
-
-  getComponentTagName(state: Register) {
-    this.push(Op.GetComponentTagName, state);
-  }
-
-  getComponentLayout(state: Register) {
-    this.push(Op.GetComponentLayout, state);
-  }
-
-  invokeComponentLayout() {
-    this.push(Op.InvokeComponentLayout);
-  }
-
-  didCreateElement(state: Register) {
-    this.push(Op.DidCreateElement, state);
-  }
-
-  didRenderLayout(state: Register) {
-    this.push(Op.DidRenderLayout, state);
-  }
-
   // partial
 
   invokePartial(referrer: Specifier, symbols: string[], evalInfo: number[]) {
@@ -261,12 +349,6 @@ export abstract class OpcodeBuilder<Specifier> {
 
   debugger(symbols: string[], evalInfo: number[]) {
     this.push(Op.Debugger, this.constants.stringArray(symbols), this.constants.array(evalInfo));
-  }
-
-  // content
-
-  dynamicContent(isTrusting: boolean) {
-    this.push(Op.DynamicContent, isTrusting ? 1 : 0);
   }
 
   // dom
@@ -405,41 +487,9 @@ export abstract class OpcodeBuilder<Specifier> {
 
   // vm
 
-  pushRemoteElement() {
-    this.push(Op.PushRemoteElement);
-  }
-
-  popRemoteElement() {
-    this.push(Op.PopRemoteElement);
-  }
-
-  label(name: string) {
-    this.labels.label(name, this.nextPos);
-  }
-
-  pushRootScope(symbols: number, bindCallerScope: boolean) {
-    this.push(Op.RootScope, symbols, (bindCallerScope ? 1 : 0));
-  }
-
-  pushChildScope() {
-    this.push(Op.ChildScope);
-  }
-
-  popScope() {
-    this.push(Op.PopScope);
-  }
-
   returnTo(label: string) {
     this.reserve(Op.ReturnTo);
     this.labels.target(this.pos, Op.ReturnTo, label);
-  }
-
-  pushDynamicScope() {
-    this.push(Op.PushDynamicScope);
-  }
-
-  popDynamicScope() {
-    this.push(Op.PopDynamicScope);
   }
 
   primitive(_primitive: Primitive) {
@@ -522,26 +572,6 @@ export abstract class OpcodeBuilder<Specifier> {
 
   return() {
     this.push(Op.Return);
-  }
-
-  pushFrame() {
-    this.push(Op.PushFrame);
-  }
-
-  popFrame() {
-    this.push(Op.PopFrame);
-  }
-
-  invokeVirtual(): void {
-    this.push(Op.InvokeVirtual);
-  }
-
-  invokeYield(): void {
-    this.push(Op.InvokeYield);
-  }
-
-  toBoolean() {
-    this.push(Op.ToBoolean);
   }
 
   jump(target: string) {
@@ -717,6 +747,10 @@ export abstract class OpcodeBuilder<Specifier> {
     this.popFrame();
   }
 
+  populateLayout(state: number) {
+    this.push(Op.PopulateLayout, state);
+  }
+
   invokeComponent(attrs: Option<CompilableBlock>, params: Option<WireFormat.Core.Params>, hash: WireFormat.Core.Hash, synthetic: boolean, block: Option<CompilableBlock>, inverse: Option<CompilableBlock> = null, layout?: ICompilableTemplate<ProgramSymbolTable>) {
     this.fetch(Register.s0);
     this.dup(Register.sp, 1);
@@ -729,28 +763,17 @@ export abstract class OpcodeBuilder<Specifier> {
     this.compileArgs(params, hash, blocks, synthetic);
     this.prepareArgs(Register.s0);
 
-    this.beginComponentTransaction();
-    this.pushDynamicScope();
-    this.createComponent(Register.s0, block !== null, inverse !== null);
-    this.registerComponentDestructor(Register.s0);
+    this.invokePreparedComponent(block !== null, () => {
+      if (layout) {
+        this.pushSymbolTable(layout.symbolTable);
+        this.pushLayout(layout);
+        this.resolveLayout();
+      } else {
+        this.getComponentLayout(Register.s0);
+      }
 
-    this.getComponentSelf(Register.s0);
-
-    if (layout) {
-      this.pushSymbolTable(layout.symbolTable);
-      this.pushLayout(layout);
-      this.resolveLayout();
-    } else {
-      this.getComponentLayout(Register.s0);
-    }
-
-    this.invokeComponentLayout();
-    this.didRenderLayout(Register.s0);
-    this.popFrame();
-
-    this.popScope();
-    this.popDynamicScope();
-    this.commitComponentTransaction();
+      this.populateLayout(Register.s0);
+    });
 
     this.load(Register.s0);
   }
@@ -780,7 +803,7 @@ export abstract class OpcodeBuilder<Specifier> {
 
     this.beginComponentTransaction();
     this.pushDynamicScope();
-    this.createComponent(Register.s0, block !== null, inverse !== null);
+    this.createComponent(Register.s0, block !== null);
 
     if (capabilities.createArgs) {
       this.popFrame();

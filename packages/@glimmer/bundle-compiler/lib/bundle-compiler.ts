@@ -8,7 +8,8 @@ import {
   Recast,
   SymbolTable,
   VMHandle,
-  ComponentCapabilities
+  ComponentCapabilities,
+  Unique
 } from "@glimmer/interfaces";
 import {
   CompilableTemplate,
@@ -17,7 +18,8 @@ import {
   CompileTimeLookup,
   CompileOptions,
   ICompilableTemplate,
-  EagerOpcodeBuilder
+  EagerOpcodeBuilder,
+  SimpleOpcodeBuilder
 } from "@glimmer/opcode-compiler";
 import {
   WriteOnlyProgram,
@@ -47,11 +49,11 @@ export interface BundleCompilationResult {
 
 export class DebugConstants extends WriteOnlyConstants {
   getFloat(value: number): number {
-    return this.floats[value - 1];
+    return this.floats[value];
   }
 
   getString(value: number): string {
-    return this.strings[value - 1];
+    return this.strings[value];
   }
 
   getStringArray(value: number): string[] {
@@ -67,11 +69,11 @@ export class DebugConstants extends WriteOnlyConstants {
   }
 
   getArray(value: number): number[] {
-    return this.arrays[value - 1];
+    return this.arrays[value];
   }
 
   getSymbolTable<T extends SymbolTable>(value: number): T {
-    return this.tables[value - 1] as T;
+    return this.tables[value] as T;
   }
 
   resolveHandle<T>(s: number): T {
@@ -79,7 +81,7 @@ export class DebugConstants extends WriteOnlyConstants {
   }
 
   getSerializable<T>(s: number): T {
-    return this.serializables[s - 1] as T;
+    return this.serializables[s] as T;
   }
 }
 
@@ -123,6 +125,10 @@ export class BundleCompiler {
   }
 
   compile() {
+    let builder = new SimpleOpcodeBuilder();
+    builder.main();
+    let main = builder.commit(this.program.heap, 0);
+
     this.firstPass.forEach((_block, specifier) => {
       this.compileSpecifier(specifier);
     });
@@ -130,6 +136,7 @@ export class BundleCompiler {
     let { heap, constants } = this.program;
 
     return {
+      main: main as Unique<'Handle'>,
       heap: heap.capture(),
       pool: constants.toPool()
     };

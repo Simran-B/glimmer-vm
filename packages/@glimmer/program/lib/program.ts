@@ -1,7 +1,7 @@
 
-import { CompileTimeProgram, Recast, VMHandle } from "@glimmer/interfaces";
+import { CompileTimeProgram, Recast, VMHandle, RuntimeResolver } from "@glimmer/interfaces";
 import { DEBUG } from "@glimmer/local-debug-flags";
-import { Constants, WriteOnlyConstants, RuntimeConstants } from './constants';
+import { Constants, WriteOnlyConstants, RuntimeConstants, ConstantPool } from './constants';
 import { Opcode } from './opcode';
 
 enum TableSlotState {
@@ -15,6 +15,12 @@ const ENTRY_SIZE = 4;
 const SIZE_OFFSET = 1;
 const SCOPESIZE_OFFSET = 2;
 const STATE_OFFSET = 3;
+
+export interface SerializedHeap {
+  buffer: ArrayBuffer;
+  table: number[];
+  handle: number;
+}
 
 /**
  * The Heap is responsible for dynamically allocating
@@ -45,7 +51,7 @@ export class Heap {
   private offset = 0;
   private handle = 0;
 
-  constructor(serializedHeap?: { buffer: ArrayBuffer, table: number[], handle: number }) {
+  constructor(serializedHeap?: SerializedHeap) {
     if (serializedHeap) {
       let { buffer, table, handle } = serializedHeap;
       this.heap = new Uint16Array(buffer);
@@ -160,7 +166,7 @@ export class Heap {
     this.offset = this.offset - compactedSize;
   }
 
-  capture() {
+  capture(): SerializedHeap {
     // Only called in eager mode
     let buffer = slice(this.heap, 0, this.offset);
     return {
@@ -188,6 +194,13 @@ export class WriteOnlyProgram implements CompileTimeProgram {
 
 export class RuntimeProgram<Specifier> {
   [key: number]: never;
+
+  static hydrate<Specifier>(rawHeap: SerializedHeap, pool: ConstantPool, resolver: RuntimeResolver<Specifier>) {
+    let heap = new Heap(rawHeap);
+    let constants = new RuntimeConstants(resolver, pool);
+
+    return new RuntimeProgram(constants, heap);
+  }
 
   private _opcode: Opcode;
 
