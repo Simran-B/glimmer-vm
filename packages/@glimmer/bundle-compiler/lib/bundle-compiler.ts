@@ -47,11 +47,11 @@ export interface BundleCompilationResult {
 
 export class DebugConstants extends WriteOnlyConstants {
   getFloat(value: number): number {
-    return this.floats[value - 1];
+    return this.floats[value];
   }
 
   getString(value: number): string {
-    return this.strings[value - 1];
+    return this.strings[value];
   }
 
   getStringArray(value: number): string[] {
@@ -67,11 +67,11 @@ export class DebugConstants extends WriteOnlyConstants {
   }
 
   getArray(value: number): number[] {
-    return this.arrays[value - 1];
+    return this.arrays[value];
   }
 
   getSymbolTable<T extends SymbolTable>(value: number): T {
-    return this.tables[value - 1] as T;
+    return this.tables[value] as T;
   }
 
   resolveHandle<T>(s: number): T {
